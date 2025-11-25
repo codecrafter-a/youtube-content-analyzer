@@ -1,5 +1,13 @@
 import OpenAI from 'openai';
-import { DESCRIPTION_MAX_LENGTH, MAX_TOPICS, MAX_VIDEOS } from './config';
+import { 
+  DESCRIPTION_MAX_LENGTH, 
+  MAX_TOPICS, 
+  MAX_VIDEOS, 
+  MAX_VIDEO_IDEAS,
+  NEWS_SUMMARY_LENGTH,
+  REDDIT_SUMMARY_LENGTH 
+} from './config';
+import type { TopicAnalysis, VideoIdea } from './types';
 
 let openaiClientCache: OpenAI | null = null;
 let cachedApiKey: string | null = null;
@@ -18,12 +26,7 @@ function getOpenAIClient(apiKey: string): OpenAI {
   return openaiClientCache;
 }
 
-export interface TopicAnalysis {
-  mainTopics: string[];
-  commonThemes: string[];
-  contentStyle: string;
-  targetAudience: string;
-}
+export type { TopicAnalysis, VideoIdea };
 
 
 export async function analyzeVideoTopics(
@@ -79,30 +82,32 @@ Respond in JSON format:
       throw new Error('No response from OpenAI');
     }
 
-    const parsed = JSON.parse(content) as TopicAnalysis;
+    const parsed = JSON.parse(content) as Partial<TopicAnalysis>;
     
     if (!parsed.mainTopics || !Array.isArray(parsed.mainTopics)) {
       throw new Error('Invalid response format: mainTopics missing');
     }
     
-    parsed.mainTopics = parsed.mainTopics.slice(0, MAX_TOPICS);
+    const validated: TopicAnalysis = {
+      mainTopics: parsed.mainTopics.slice(0, MAX_TOPICS),
+      commonThemes: Array.isArray(parsed.commonThemes) ? parsed.commonThemes : [],
+      contentStyle: parsed.contentStyle || 'Not specified',
+      targetAudience: parsed.targetAudience || 'Not specified',
+    };
     
-    return parsed;
-  } catch (error: any) {
+    return validated;
+  } catch (error: unknown) {
     if (error instanceof SyntaxError) {
       throw new Error('Invalid JSON response from OpenAI');
     }
-    if (error.message?.includes('rate limit') || error.status === 429) {
-      throw new Error('OpenAI rate limit exceeded. Please try again later');
+    if (error instanceof Error) {
+      if (error.message?.includes('rate limit') || (error as any).status === 429) {
+        throw new Error('OpenAI rate limit exceeded. Please try again later');
+      }
+      throw new Error(`Failed to analyze topics: ${error.message}`);
     }
-    throw new Error(`Failed to analyze topics: ${error.message}`);
+    throw new Error('Failed to analyze topics: Unknown error');
   }
-}
-
-export interface VideoIdea {
-  title: string;
-  thumbnailDesign: string;
-  videoIdea: string;
 }
 
 export async function generateVideoIdeas(
@@ -116,23 +121,23 @@ export async function generateVideoIdeas(
   apiKey: string
 ): Promise<VideoIdea[]> {
   const newsSummary = news
-    .slice(0, 5)
-    .map((n) => `- ${n.title}: ${n.description.substring(0, 150)}`)
+    .slice(0, MAX_VIDEO_IDEAS)
+    .map((n) => `- ${n.title}: ${n.description.substring(0, NEWS_SUMMARY_LENGTH)}`)
     .join('\n') || 'No recent news found';
 
   const redditSummary = redditPosts
-    .slice(0, 5)
-    .map((r) => `- ${r.title}: ${r.content.substring(0, 150)}`)
+    .slice(0, MAX_VIDEO_IDEAS)
+    .map((r) => `- ${r.title}: ${r.content.substring(0, REDDIT_SUMMARY_LENGTH)}`)
     .join('\n') || 'No Reddit discussions found';
 
   const recentTitles = channelInfo.recentVideos
-    .slice(0, 5)
+    .slice(0, MAX_VIDEO_IDEAS)
     .map((v) => `- ${v.title}`)
     .join('\n');
 
   const systemPrompt = 'You are an expert YouTube content strategist. Generate engaging, relevant video ideas that match the channel style. Always respond with valid JSON only.';
   
-  const userPrompt = `Generate 5 video ideas for the channel "${channelInfo.channelName}".
+  const userPrompt = `Generate ${MAX_VIDEO_IDEAS} video ideas for the channel "${channelInfo.channelName}".
 
 Channel Analysis:
 - Main Topics: ${channelInfo.topics.mainTopics.join(', ')}
@@ -149,7 +154,7 @@ ${newsSummary}
 Reddit Discussions:
 ${redditSummary}
 
-Generate 5 video ideas that:
+Generate ${MAX_VIDEO_IDEAS} video ideas that:
 1. Match the channel's style and topics
 2. Are relevant to current news and discussions
 3. Have engaging titles in the same style as recent videos
@@ -185,23 +190,26 @@ Respond in JSON format:
       throw new Error('No response from OpenAI');
     }
 
-    const result = JSON.parse(content) as { ideas: VideoIdea[] };
+    const result = JSON.parse(content) as { ideas?: VideoIdea[] };
     
     if (!result.ideas || !Array.isArray(result.ideas)) {
       throw new Error('Invalid response format: ideas array missing');
     }
     
-    return result.ideas.slice(0, 5).filter(idea => 
-      idea.title && idea.thumbnailDesign && idea.videoIdea
+    return result.ideas.slice(0, MAX_VIDEO_IDEAS).filter((idea): idea is VideoIdea => 
+      Boolean(idea.title && idea.thumbnailDesign && idea.videoIdea)
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     if (error instanceof SyntaxError) {
       throw new Error('Invalid JSON response from OpenAI');
     }
-    if (error.message?.includes('rate limit') || error.status === 429) {
-      throw new Error('OpenAI rate limit exceeded. Please try again later');
+    if (error instanceof Error) {
+      if (error.message?.includes('rate limit') || (error as any).status === 429) {
+        throw new Error('OpenAI rate limit exceeded. Please try again later');
+      }
+      throw new Error(`Failed to generate video ideas: ${error.message}`);
     }
-    throw new Error(`Failed to generate video ideas: ${error.message}`);
+    throw new Error('Failed to generate video ideas: Unknown error');
   }
 }
 

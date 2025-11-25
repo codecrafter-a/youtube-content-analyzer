@@ -1,28 +1,12 @@
 import { createHttpClient, handleApiError } from './http-client';
 import { MAX_VIDEOS } from './config';
+import type { YouTubeVideo, YouTubeChannelInfo } from './types';
 
 const httpClient = createHttpClient();
 
-export interface YouTubeVideo {
-  id: string;
-  title: string;
-  description: string;
-  publishedAt: string;
-  thumbnail: string;
-  url: string;
-}
+export type { YouTubeVideo, YouTubeChannelInfo };
 
-export interface YouTubeChannelInfo {
-  channelId: string;
-  channelName: string;
-  videos: YouTubeVideo[];
-}
-
-/**
- * Extract channel ID or username from YouTube URL
- */
 export function extractChannelId(url: string): string | null {
-  // Handle different YouTube URL formats
   const patterns = [
     /youtube\.com\/channel\/([a-zA-Z0-9_-]+)/,
     /youtube\.com\/c\/([a-zA-Z0-9_-]+)/,
@@ -39,9 +23,12 @@ export function extractChannelId(url: string): string | null {
     }
   }
 
-  // If it's just a handle/username without URL, return as-is
-  if (url.startsWith('@') || /^[a-zA-Z0-9_-]+$/.test(url)) {
-    return url.startsWith('@') ? url : url;
+  if (url.startsWith('@')) {
+    return url;
+  }
+  
+  if (/^[a-zA-Z0-9_-]+$/.test(url)) {
+    return url;
   }
 
   return null;
@@ -57,9 +44,54 @@ export async function fetchChannelVideos(
   }
 
   try {
-    let channel: any;
+    interface YouTubeChannelItem {
+      id: string;
+      snippet: {
+        title: string;
+      };
+      contentDetails?: {
+        relatedPlaylists?: {
+          uploads?: string;
+        };
+      };
+    }
+
+    interface YouTubeChannelResponse {
+      items?: YouTubeChannelItem[];
+    }
+
+    interface YouTubeSearchItem {
+      snippet: {
+        channelId: string;
+      };
+    }
+
+    interface YouTubeSearchResponse {
+      items?: YouTubeSearchItem[];
+    }
+
+    interface YouTubePlaylistItem {
+      snippet: {
+        title: string;
+        description: string;
+        publishedAt: string;
+        thumbnails: {
+          high?: { url: string };
+          default?: { url: string };
+        };
+      };
+      contentDetails: {
+        videoId: string;
+      };
+    }
+
+    interface YouTubePlaylistResponse {
+      items?: YouTubePlaylistItem[];
+    }
+
+    let channel: YouTubeChannelItem | undefined;
     
-    const channelResponse = await httpClient.get(
+    const channelResponse = await httpClient.get<YouTubeChannelResponse>(
       'https://www.googleapis.com/youtube/v3/channels',
       {
         params: {
@@ -70,11 +102,12 @@ export async function fetchChannelVideos(
       }
     );
 
-    if (channelResponse.data.items?.length > 0) {
-      channel = channelResponse.data.items[0];
+    const channelItems = channelResponse.data.items;
+    if (channelItems && channelItems.length > 0) {
+      channel = channelItems[0];
     } else {
       const searchQuery = channelId.startsWith('@') ? channelId : `@${channelId}`;
-      const searchResponse = await httpClient.get(
+      const searchResponse = await httpClient.get<YouTubeSearchResponse>(
         'https://www.googleapis.com/youtube/v3/search',
         {
           params: {
@@ -88,9 +121,9 @@ export async function fetchChannelVideos(
       );
 
       const searchItems = searchResponse.data.items;
-      if (searchItems?.length > 0) {
+      if (searchItems && searchItems.length > 0) {
         const foundChannelId = searchItems[0].snippet.channelId;
-        const channelDetailsResponse = await httpClient.get(
+        const channelDetailsResponse = await httpClient.get<YouTubeChannelResponse>(
           'https://www.googleapis.com/youtube/v3/channels',
           {
             params: {
@@ -101,9 +134,9 @@ export async function fetchChannelVideos(
           }
         );
         
-        const channelItems = channelDetailsResponse.data.items;
-        if (channelItems?.length > 0) {
-          channel = channelItems[0];
+        const channelDetailsItems = channelDetailsResponse.data.items;
+        if (channelDetailsItems && channelDetailsItems.length > 0) {
+          channel = channelDetailsItems[0];
         } else {
           throw new Error('Channel details not found');
         }
@@ -117,7 +150,7 @@ export async function fetchChannelVideos(
       throw new Error('Channel uploads playlist not found');
     }
 
-    const videosResponse = await httpClient.get(
+    const videosResponse = await httpClient.get<YouTubePlaylistResponse>(
       'https://www.googleapis.com/youtube/v3/playlistItems',
       {
         params: {
@@ -134,7 +167,7 @@ export async function fetchChannelVideos(
       throw new Error('No videos found for this channel');
     }
 
-    const videos: YouTubeVideo[] = videoItems.map((item: any) => {
+    const videos: YouTubeVideo[] = videoItems.map((item) => {
       const snippet = item.snippet;
       const contentDetails = item.contentDetails;
       const thumbnails = snippet.thumbnails;
@@ -149,14 +182,20 @@ export async function fetchChannelVideos(
       };
     });
 
+    if (!channel) {
+      throw new Error('Channel information is missing');
+    }
+
     return {
       channelId: channel.id,
       channelName: channel.snippet.title,
       videos,
     };
-  } catch (error: any) {
-    if (error.message.includes('Channel') || error.message.includes('videos')) {
-      throw error;
+  } catch (error: unknown) {
+    if (error instanceof Error) {
+      if (error.message.includes('Channel') || error.message.includes('videos')) {
+        throw error;
+      }
     }
     handleApiError(error, 'YouTube API');
   }

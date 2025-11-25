@@ -7,13 +7,13 @@ export const MAX_VIDEOS = 10;
 export const MAX_TOPICS = 7;
 export const MAX_NEWS_ARTICLES = 10;
 export const MAX_REDDIT_POSTS = 10;
+export const MAX_VIDEO_IDEAS = 5;
 export const DESCRIPTION_MAX_LENGTH = 500;
 export const REDDIT_CONTENT_MAX_LENGTH = 200;
+export const NEWS_SUMMARY_LENGTH = 150;
+export const REDDIT_SUMMARY_LENGTH = 150;
 
-/**
- * Get API keys from environment variables
- * Next.js automatically loads .env.local, .env, .env.production, etc.
- */
+
 export function getApiKeys() {
   const youtubeApiKey = process.env.YOUTUBE_API_KEY;
   const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -42,7 +42,7 @@ export function getApiKeys() {
 export function isValidYouTubeUrl(url: string): boolean {
   const youtubePatterns = [
     /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)/,
-    /^@?[a-zA-Z0-9_-]+$/, // Handle or channel name
+    /^@?[a-zA-Z0-9_-]+$/,
   ];
 
   return youtubePatterns.some((pattern) => pattern.test(url));

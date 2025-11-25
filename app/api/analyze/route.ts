@@ -4,6 +4,7 @@ import { analyzeVideoTopics, generateVideoIdeas } from '@/lib/ai';
 import { fetchRelevantNews } from '@/lib/news';
 import { searchRedditPosts } from '@/lib/reddit';
 import { getApiKeys } from '@/lib/config';
+import type { YouTubeChannelInfo } from '@/lib/types';
 
 export const maxDuration = 60; 
 
@@ -63,20 +64,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const channelInfo = await fetchChannelVideos(channelId, youtubeApiKey);
+    const channelInfo: YouTubeChannelInfo = await fetchChannelVideos(channelId, youtubeApiKey);
 
+    // Prepare video data for analysis
     const videoData = channelInfo.videos.map((v) => ({
       title: v.title,
       description: v.description,
     }));
 
+    // Analyze topics from videos
     const topics = await analyzeVideoTopics(videoData, openaiApiKey);
 
+    // Fetch news and Reddit posts in parallel
     const [news, redditPosts] = await Promise.all([
-      fetchRelevantNews(topics.mainTopics, newsApiKey),
-      searchRedditPosts(topics.mainTopics),
+      fetchRelevantNews(topics.mainTopics, newsApiKey).catch((err) => {
+        console.warn('News fetch failed:', err);
+        return [];
+      }),
+      searchRedditPosts(topics.mainTopics).catch((err) => {
+        console.warn('Reddit fetch failed:', err);
+        return [];
+      }),
     ]);
 
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Fetched data:', {
+        newsCount: news.length,
+        redditCount: redditPosts.length,
+        topics: topics.mainTopics,
+      });
+    }
+
+    // Generate video ideas
     const videoIdeas = await generateVideoIdeas(
       {
         channelName: channelInfo.channelName,
@@ -88,24 +107,36 @@ export async function POST(request: NextRequest) {
       openaiApiKey
     );
 
+    // Transform channel info to match expected format
+    const formattedChannelInfo = {
+      channelName: channelInfo.channelName,
+      videos: channelInfo.videos.map((v) => ({
+        title: v.title,
+        url: v.url,
+        thumbnail: v.thumbnail,
+      })),
+    };
+
     return NextResponse.json({
       success: true,
-      channelInfo,
+      channelInfo: formattedChannelInfo,
       topics,
       news,
       redditPosts,
       videoIdeas,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('Analysis error:', error);
     
-    const statusCode = error.message?.includes('not found') ? 404 :
-                      error.message?.includes('rate limit') ? 429 :
-                      error.message?.includes('timeout') ? 504 : 500;
+    const errorMessage = error instanceof Error ? error.message : 'Failed to analyze channel';
+    
+    const statusCode = errorMessage.includes('not found') ? 404 :
+                      errorMessage.includes('rate limit') ? 429 :
+                      errorMessage.includes('timeout') ? 504 : 500;
 
     return NextResponse.json(
       { 
-        error: error.message || 'Failed to analyze channel',
+        error: errorMessage,
         success: false
       },
       { status: statusCode }

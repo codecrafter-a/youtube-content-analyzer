@@ -1,14 +1,10 @@
 import { createHttpClient } from './http-client';
 import { MAX_NEWS_ARTICLES } from './config';
+import type { NewsArticle } from './types';
 
 const httpClient = createHttpClient();
 
-export interface NewsArticle {
-  title: string;
-  description: string;
-  url: string;
-  publishedAt: string;
-}
+export type { NewsArticle };
 
 export async function fetchRelevantNews(
   topics: string[],
@@ -19,13 +15,31 @@ export async function fetchRelevantNews(
   }
 
   try {
-    const today = new Date().toISOString().split('T')[0];
+    interface NewsApiResponse {
+      status?: string;
+      articles?: Array<{
+        title?: string;
+        description?: string;
+        content?: string;
+        url?: string;
+        publishedAt?: string;
+      }>;
+      message?: string;
+    }
+
+    const today = new Date();
+    const weekAgo = new Date(today);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    
+    const fromDate = weekAgo.toISOString().split('T')[0];
+    const toDate = today.toISOString().split('T')[0];
     const query = topics.slice(0, 3).join(' OR ');
 
-    const response = await httpClient.get('https://newsapi.org/v2/everything', {
+    const response = await httpClient.get<NewsApiResponse>('https://newsapi.org/v2/everything', {
       params: {
         q: query,
-        from: today,
+        from: fromDate,
+        to: toDate,
         sortBy: 'relevancy',
         pageSize: MAX_NEWS_ARTICLES,
         language: 'en',
@@ -33,20 +47,25 @@ export async function fetchRelevantNews(
       },
     });
 
+    if (response.data.status === 'error') {
+      console.warn('NewsAPI error:', response.data.message);
+      return [];
+    }
+
     const articles = response.data.articles || [];
     
     return articles
       .slice(0, MAX_NEWS_ARTICLES)
-      .map((article: any) => ({
+      .map((article) => ({
         title: article.title || 'Untitled',
         description: article.description || article.content?.substring(0, 200) || '',
         url: article.url || '',
         publishedAt: article.publishedAt || new Date().toISOString(),
       }))
       .filter((article: NewsArticle) => article.title && article.url);
-  } catch (error: any) {
-    // Silently fail for news - it's optional
-    console.warn('NewsAPI error (non-critical):', error.message);
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.warn('NewsAPI error (non-critical):', errorMessage);
     return [];
   }
 }
